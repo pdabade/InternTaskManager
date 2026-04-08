@@ -14,6 +14,7 @@ export interface Task extends Models.Document {
   dueDate: string;
   status: "open" | "completed" | "reviewed";
   estimatedEffort: string;
+  reviewedBy?: string | null;
 }
 
 export interface Submission extends Models.Document {
@@ -24,4 +25,6 @@ export interface Submission extends Models.Document {
   attachedFiles: string; // URL string
   reviewStatus: "pendingReview" | "reviewed";
   task: string;
+  reviewedBy?: string | null;
+  feedback?: string;
 }
