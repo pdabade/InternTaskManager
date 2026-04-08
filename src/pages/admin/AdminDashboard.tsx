@@ -370,7 +370,7 @@ export default function AdminDashboard() {
                   <tr key={task.$id}>
                     <td>{task.taskTitle}</td>
                     <td>{task.description}</td>
-                    <td>{task.dueDate}</td>
+                    <td>{new Date(task.dueDate).toLocaleDateString()}</td>
                     <td>{task.estimatedEffort}</td>
                     <td>
                       <select
@@ -388,7 +388,9 @@ export default function AdminDashboard() {
                         <option value="reviewed">Reviewed</option>
                       </select>
                     </td>
-                    <td>{task.reviewedBy ? getUserName(task.reviewedBy) : "—"}</td>
+                    <td>
+                      {task.reviewedBy ? getUserName(task.reviewedBy) : "—"}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -458,7 +460,9 @@ export default function AdminDashboard() {
                         <option value="reviewed">Reviewed</option>
                       </select>
                     </td>
-                    <td>{sub.reviewedBy ? getUserName(sub.reviewedBy) : "—"}</td>
+                    <td>
+                      {sub.reviewedBy ? getUserName(sub.reviewedBy) : "—"}
+                    </td>
                     <td style={{ whiteSpace: "pre-line" }}>
                       {sub.feedback || "—"}
                     </td>

@@ -145,6 +145,10 @@ export default function InternDashboard() {
     }
   };
 
+  const getTaskTitle = (taskId: string) => {
+    return tasks.find((task) => task.$id === taskId)?.taskTitle ?? taskId;
+  };
+
   return (
     <div className="dashboard">
       <div className="tab-bar">
@@ -185,7 +189,7 @@ export default function InternDashboard() {
                   <tr key={task.$id}>
                     <td>{task.taskTitle}</td>
                     <td>{task.description}</td>
-                    <td>{task.dueDate}</td>
+                    <td>{new Date(task.dueDate).toLocaleDateString()}</td>
                     <td>{task.estimatedEffort}</td>
                     <td>
                       <span className={`badge badge-${task.status}`}>
@@ -301,6 +305,7 @@ export default function InternDashboard() {
                   <th>Description</th>
                   <th>File</th>
                   <th>Status</th>
+                  <th>Feedback</th>
                   <th>Action</th>
                 </tr>
               </thead>
@@ -308,7 +313,7 @@ export default function InternDashboard() {
                 {submissions.map((sub) => (
                   <tr key={sub.$id}>
                     <td>{sub.submissionTitle}</td>
-                    <td>{sub.task}</td>
+                    <td>{getTaskTitle(sub.task)}</td>
                     <td>{new Date(sub.submissionDate).toLocaleDateString()}</td>
                     <td>{sub.description}</td>
                     <td>
@@ -330,6 +335,9 @@ export default function InternDashboard() {
                           ? "Pending"
                           : "Reviewed"}
                       </span>
+                    </td>
+                    <td style={{ whiteSpace: "pre-line" }}>
+                      {sub.feedback || "—"}
                     </td>
                     <td>
                       {/* Only allow editing if still pending review */}
