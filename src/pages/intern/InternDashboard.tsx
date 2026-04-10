@@ -7,6 +7,11 @@ import {
   ID,
   Query,
 } from "../../lib/appwrite";
+import {
+  normalizeUrls,
+  textareaValueToUrls,
+  urlsToTextareaValue,
+} from "../../lib/submissionUrls";
 import { useAuthContext } from "../../context/AuthContext";
 import type { Task, Submission } from "../../types";
 
@@ -27,7 +32,7 @@ export default function InternDashboard() {
     submissionTitle: "",
     task: "",
     description: "",
-    attachedFiles: "",
+    urlsText: "",
   });
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -76,7 +81,7 @@ export default function InternDashboard() {
       submissionTitle: "",
       task: "",
       description: "",
-      attachedFiles: "",
+      urlsText: "",
     });
     setFormError(null);
     setFormSuccess(false);
@@ -89,7 +94,7 @@ export default function InternDashboard() {
       submissionTitle: sub.submissionTitle,
       task: sub.task,
       description: sub.description,
-      attachedFiles: sub.attachedFiles ?? "",
+      urlsText: urlsToTextareaValue(sub.urls),
     });
     setFormError(null);
     setFormSuccess(false);
@@ -104,6 +109,8 @@ export default function InternDashboard() {
     setSubmitting(true);
 
     try {
+      const urls = textareaValueToUrls(form.urlsText);
+
       if (editingSubmission) {
         // Edit: only allow editing if still pending
         await databases.updateDocument(
@@ -114,7 +121,7 @@ export default function InternDashboard() {
             submissionTitle: form.submissionTitle,
             task: form.task,
             description: form.description,
-            attachedFiles: form.attachedFiles,
+            urls,
           },
         );
       } else {
@@ -127,7 +134,7 @@ export default function InternDashboard() {
             submissionTitle: form.submissionTitle,
             task: form.task,
             description: form.description,
-            attachedFiles: form.attachedFiles,
+            urls,
             submittedBy: user.$id,
             submissionDate: new Date().toISOString(),
             reviewStatus: "pendingReview",
@@ -261,15 +268,16 @@ export default function InternDashboard() {
                 />
               </div>
               <div className="field">
-                <label>Attached File URL</label>
-                <input
-                  type="url"
-                  placeholder="https://…"
-                  value={form.attachedFiles}
+                <label>URLs</label>
+                <textarea
+                  placeholder={"https://example.com\nhttps://github.com/..."}
+                  value={form.urlsText}
+                  rows={4}
                   onChange={(e) =>
-                    setForm({ ...form, attachedFiles: e.target.value })
+                    setForm({ ...form, urlsText: e.target.value })
                   }
                 />
+                <small className="field-hint">Add one URL per line.</small>
               </div>
 
               <div className="form-actions">
@@ -303,7 +311,7 @@ export default function InternDashboard() {
                   <th>Task</th>
                   <th>Date</th>
                   <th>Description</th>
-                  <th>File</th>
+                  <th>URLs</th>
                   <th>Status</th>
                   <th>Feedback</th>
                   <th>Action</th>
@@ -317,14 +325,19 @@ export default function InternDashboard() {
                     <td>{new Date(sub.submissionDate).toLocaleDateString()}</td>
                     <td>{sub.description}</td>
                     <td>
-                      {sub.attachedFiles ? (
-                        <a
-                          href={sub.attachedFiles}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          View
-                        </a>
+                      {normalizeUrls(sub.urls).length > 0 ? (
+                        <div className="url-list">
+                          {normalizeUrls(sub.urls).map((url, index) => (
+                            <a
+                              key={`${sub.$id}-url-${index}`}
+                              href={url}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Open Link {index + 1}
+                            </a>
+                          ))}
+                        </div>
                       ) : (
                         "—"
                       )}

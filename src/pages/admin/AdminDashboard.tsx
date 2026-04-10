@@ -7,6 +7,7 @@ import {
   USERS_COLLECTION_ID,
   ID,
 } from "../../lib/appwrite";
+import { normalizeUrls } from "../../lib/submissionUrls";
 import { useAuthContext } from "../../context/AuthContext";
 import type { AppUser, Task, Submission } from "../../types";
 
@@ -417,7 +418,7 @@ export default function AdminDashboard() {
                   <th>Submitted By</th>
                   <th>Date</th>
                   <th>Description</th>
-                  <th>File</th>
+                  <th>URLs</th>
                   <th>Status</th>
                   <th>Reviewed By</th>
                   <th>Feedback</th>
@@ -433,14 +434,19 @@ export default function AdminDashboard() {
                     <td>{new Date(sub.submissionDate).toLocaleDateString()}</td>
                     <td>{sub.description}</td>
                     <td>
-                      {sub.attachedFiles ? (
-                        <a
-                          href={sub.attachedFiles}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          View
-                        </a>
+                      {normalizeUrls(sub.urls).length > 0 ? (
+                        <div className="url-list">
+                          {normalizeUrls(sub.urls).map((url, index) => (
+                            <a
+                              key={`${sub.$id}-url-${index}`}
+                              href={url}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Open Link {index + 1}
+                            </a>
+                          ))}
+                        </div>
                       ) : (
                         "—"
                       )}

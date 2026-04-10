@@ -22,7 +22,7 @@ export interface Submission extends Models.Document {
   submittedBy: string; // user $id
   submissionTitle: string;
   description: string;
-  attachedFiles: string; // URL string
+  urls: string[];
   reviewStatus: "pendingReview" | "reviewed";
   task: string;
   reviewedBy?: string | null;
