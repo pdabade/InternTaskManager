@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import {
@@ -10,6 +11,10 @@ import {
 } from "../lib/appwrite";
 import type { Models } from "appwrite";
 import type { AppUser } from "../types";
+
+interface AppwriteLikeError {
+  code?: number;
+}
 
 interface AuthContextType {
   user: Models.User<Models.Preferences> | null;
@@ -50,7 +55,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (appwriteError.code == 404) {
         try {
           await createAppUser(authUser);
-        } catch (error: any) {
+        } catch (error: unknown) {
           console.error(error);
           setUser(null);
           setAppUser(null);
@@ -83,8 +88,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const u = await account.get();
         setUser(u);
         await fetchAppUser(u);
-      } catch (error: any) {
-        if (error.code !== 401) {
+      } catch (error: unknown) {
+        const appwriteError = error as AppwriteLikeError;
+        if (appwriteError.code !== 401) {
           console.error(error);
         }
         setUser(null);
@@ -94,6 +100,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     };
     init();
+    // `fetchAppUser` is intentionally defined in component scope for login reuse.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const login = async (email: string, password: string): Promise<void> => {

@@ -1,6 +1,7 @@
 import type { Models } from "appwrite";
 
 export type UserRole = "admin" | "intern";
+export type TaskStatus = "open" | "completed";
 
 export interface AppUser extends Models.Document {
   role: UserRole;
@@ -12,7 +13,7 @@ export interface Task extends Models.Document {
   taskTitle: string;
   description: string;
   dueDate: string;
-  status: "open" | "completed" | "reviewed";
+  status: TaskStatus;
   estimatedEffort: string;
   reviewedBy?: string | null;
 }
@@ -24,7 +25,13 @@ export interface Submission extends Models.Document {
   description: string;
   urls: string[];
   reviewStatus: "pendingReview" | "reviewed";
-  task: string;
+  task: string | Task;
   reviewedBy?: string | null;
   feedback?: string;
+  aiEvaluation?: string;
+  aiScore?: number | null;
+  aiFeedback?: string | null;
+  aiEvaluatedAt?: string | null;
+  isApprovedByAdmin?: boolean;
+  approvedAt?: string | null;
 }

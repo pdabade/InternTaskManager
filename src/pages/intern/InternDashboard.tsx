@@ -13,6 +13,7 @@ import {
   urlsToTextareaValue,
 } from "../../lib/submissionUrls";
 import { useAuthContext } from "../../context/AuthContext";
+import { sanitizeSubmissionVisibility } from "../../lib/visibilityUtils";
 import type { Task, Submission } from "../../types";
 
 export default function InternDashboard() {
@@ -37,10 +38,22 @@ export default function InternDashboard() {
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [formSuccess, setFormSuccess] = useState(false);
+  const openTasks = tasks.filter((task) => task.status === "open");
+  const submissionTaskOptions =
+    editingSubmission &&
+    !openTasks.some((task) => task.$id === getTaskId(editingSubmission.task))
+      ? tasks.filter(
+          (task) =>
+            task.$id === getTaskId(editingSubmission.task) ||
+            task.status === "open",
+        )
+      : openTasks;
 
   useEffect(() => {
     fetchTasks();
     fetchMySubmissions();
+    // Initial load only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const fetchTasks = async () => {
@@ -67,7 +80,11 @@ export default function InternDashboard() {
         SUBMISSIONS_COLLECTION_ID,
         [Query.equal("submittedBy", user.$id)],
       );
-      setSubmissions(res.documents as Submission[]);
+      setSubmissions(
+        (res.documents as Submission[]).map((submission) =>
+          sanitizeSubmissionVisibility(submission, "intern"),
+        ) as Submission[],
+      );
     } catch (e) {
       console.error("Failed to fetch submissions", e);
     } finally {
@@ -92,7 +109,7 @@ export default function InternDashboard() {
     setEditingSubmission(sub);
     setForm({
       submissionTitle: sub.submissionTitle,
-      task: sub.task,
+      task: getTaskId(sub.task),
       description: sub.description,
       urlsText: urlsToTextareaValue(sub.urls),
     });
@@ -109,6 +126,13 @@ export default function InternDashboard() {
     setSubmitting(true);
 
     try {
+      const selectedTask = tasks.find((task) => task.$id === form.task);
+      if (!selectedTask || selectedTask.status !== "open") {
+        throw new Error(
+          "You can only submit work for tasks that are currently open.",
+        );
+      }
+
       const urls = textareaValueToUrls(form.urlsText);
 
       if (editingSubmission) {
@@ -122,6 +146,14 @@ export default function InternDashboard() {
             task: form.task,
             description: form.description,
             urls,
+            aiEvaluation: "",
+            aiScore: null,
+            aiFeedback: "",
+            aiEvaluatedAt: null,
+            isApprovedByAdmin: false,
+            approvedAt: null,
+            reviewStatus: "pendingReview",
+            reviewedBy: null,
           },
         );
       } else {
@@ -138,6 +170,12 @@ export default function InternDashboard() {
             submittedBy: user.$id,
             submissionDate: new Date().toISOString(),
             reviewStatus: "pendingReview",
+            aiEvaluation: "",
+            aiScore: null,
+            aiFeedback: "",
+            aiEvaluatedAt: null,
+            isApprovedByAdmin: false,
+            approvedAt: null,
           },
         );
       }
@@ -152,8 +190,12 @@ export default function InternDashboard() {
     }
   };
 
-  const getTaskTitle = (taskId: string) => {
-    return tasks.find((task) => task.$id === taskId)?.taskTitle ?? taskId;
+  const getTaskTitle = (taskRef: Submission["task"]) => {
+    if (typeof taskRef === "object" && taskRef !== null) {
+      return taskRef.taskTitle;
+    }
+
+    return tasks.find((task) => task.$id === taskRef)?.taskTitle ?? taskRef;
   };
 
   return (
@@ -250,12 +292,17 @@ export default function InternDashboard() {
                   onChange={(e) => setForm({ ...form, task: e.target.value })}
                 >
                   <option value="">Select a task…</option>
-                  {tasks.map((t) => (
+                  {submissionTaskOptions.map((t) => (
                     <option key={t.$id} value={t.$id}>
                       {t.taskTitle}
                     </option>
                   ))}
                 </select>
+                {openTasks.length === 0 && (
+                  <small className="field-hint">
+                    No open tasks are available for new submissions right now.
+                  </small>
+                )}
               </div>
               <div className="field">
                 <label>Description</label>
@@ -313,6 +360,7 @@ export default function InternDashboard() {
                   <th>Description</th>
                   <th>URLs</th>
                   <th>Status</th>
+                  <th>Score</th>
                   <th>Feedback</th>
                   <th>Action</th>
                 </tr>
@@ -349,11 +397,11 @@ export default function InternDashboard() {
                           : "Reviewed"}
                       </span>
                     </td>
+                    <td>{typeof sub.aiScore === "number" ? sub.aiScore : "—"}</td>
                     <td style={{ whiteSpace: "pre-line" }}>
-                      {sub.feedback || "—"}
+                      {sub.aiFeedback || "—"}
                     </td>
                     <td>
-                      {/* Only allow editing if still pending review */}
                       {sub.reviewStatus === "pendingReview" ? (
                         <button
                           className="btn-ghost"
@@ -375,3 +423,10 @@ export default function InternDashboard() {
     </div>
   );
 }
+  const getTaskId = (taskRef: Submission["task"]) => {
+    if (typeof taskRef === "object" && taskRef !== null) {
+      return taskRef.$id;
+    }
+
+    return taskRef;
+  };

@@ -8,8 +8,13 @@ import {
   ID,
 } from "../../lib/appwrite";
 import { normalizeUrls } from "../../lib/submissionUrls";
+import {
+  approveSubmission,
+  saveAdminEvaluation,
+  evaluateSubmissionForAdmin,
+} from "../../lib/submissionController";
 import { useAuthContext } from "../../context/AuthContext";
-import type { AppUser, Task, Submission } from "../../types";
+import type { AppUser, Task, Submission, TaskStatus } from "../../types";
 
 export default function AdminDashboard() {
   const { user, appUser } = useAuthContext();
@@ -22,12 +27,13 @@ export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState<"tasks" | "submissions">("tasks");
 
   // Create task form state
+  const [showTaskForm, setShowTaskForm] = useState(false);
   const [form, setForm] = useState({
     title: "",
     description: "",
     dueDate: "",
     estimatedEffort: "",
-    status: "open" as Task["status"],
+    status: "open" as TaskStatus,
   });
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -36,19 +42,68 @@ export default function AdminDashboard() {
   const [savingTaskStatusId, setSavingTaskStatusId] = useState<string | null>(
     null,
   );
-  const [savingSubmissionStatusId, setSavingSubmissionStatusId] = useState<
+  const [evaluationError, setEvaluationError] = useState<string | null>(null);
+  const [evaluationModalSubmissionId, setEvaluationModalSubmissionId] =
+    useState<string | null>(null);
+  const [isEditingEvaluation, setIsEditingEvaluation] = useState(false);
+  const [evaluationDraft, setEvaluationDraft] = useState({
+    score: "",
+    feedback: "",
+    issuesText: "",
+    strengthsText: "",
+  });
+  const [savingEvaluationId, setSavingEvaluationId] = useState<string | null>(
+    null,
+  );
+  const [evaluatingSubmissionId, setEvaluatingSubmissionId] = useState<
     string | null
   >(null);
-  const [feedbackError, setFeedbackError] = useState<string | null>(null);
-  const [feedbackEditorId, setFeedbackEditorId] = useState<string | null>(null);
-  const [feedbackDraft, setFeedbackDraft] = useState("");
-  const [savingFeedbackId, setSavingFeedbackId] = useState<string | null>(null);
+  const [approvingSubmissionId, setApprovingSubmissionId] = useState<
+    string | null
+  >(null);
 
   useEffect(() => {
     fetchTasks();
     fetchUsers();
     fetchSubmissions();
+    // Initial load only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const normalizeUserId = (value: unknown) => {
+    if (typeof value === "object" && value !== null && "$id" in value) {
+      const documentId = (value as { $id?: unknown }).$id;
+      return typeof documentId === "string" ? documentId : null;
+    }
+
+    return typeof value === "string" ? value : null;
+  };
+
+  const normalizeTaskRef = (value: unknown) => {
+    if (typeof value === "object" && value !== null && "$id" in value) {
+      return value as Task;
+    }
+
+    return typeof value === "string" ? value : "";
+  };
+
+  const normalizeSubmission = (submission: Submission) =>
+    ({
+      ...submission,
+      submittedBy: normalizeUserId(submission.submittedBy) ?? "",
+      reviewedBy: normalizeUserId(submission.reviewedBy),
+      task: normalizeTaskRef(submission.task),
+    }) as Submission;
+
+  const normalizeTask = (task: Task) => {
+    const rawStatus = (task as { status?: unknown }).status;
+
+    return {
+      ...task,
+      status: rawStatus === "reviewed" ? "completed" : task.status,
+      reviewedBy: normalizeUserId(task.reviewedBy),
+    } as Task;
+  };
 
   const fetchTasks = async () => {
     setLoadingTasks(true);
@@ -57,7 +112,7 @@ export default function AdminDashboard() {
         DB_ID,
         TASKS_COLLECTION_ID,
       );
-      setTasks(res.documents as Task[]);
+      setTasks((res.documents as Task[]).map(normalizeTask));
     } catch (e) {
       console.error("Failed to fetch tasks", e);
     } finally {
@@ -72,7 +127,7 @@ export default function AdminDashboard() {
         DB_ID,
         SUBMISSIONS_COLLECTION_ID,
       );
-      setSubmissions(res.documents as Submission[]);
+      setSubmissions((res.documents as Submission[]).map(normalizeSubmission));
     } catch (e) {
       console.error("Failed to fetch submissions", e);
     } finally {
@@ -101,12 +156,13 @@ export default function AdminDashboard() {
     setFormSuccess(false);
     setSubmitting(true);
     try {
-      await databases.createDocument(
-        DB_ID,
-        TASKS_COLLECTION_ID,
-        ID.unique(),
-        form,
-      );
+      await databases.createDocument(DB_ID, TASKS_COLLECTION_ID, ID.unique(), {
+        taskTitle: form.title,
+        description: form.description,
+        dueDate: form.dueDate,
+        estimatedEffort: form.estimatedEffort,
+        status: form.status,
+      });
       setFormSuccess(true);
       setForm({
         title: "",
@@ -115,6 +171,7 @@ export default function AdminDashboard() {
         estimatedEffort: "",
         status: "open",
       });
+      setShowTaskForm(false);
       fetchTasks();
     } catch (e) {
       setFormError(e instanceof Error ? e.message : "Failed to create task.");
@@ -123,16 +180,54 @@ export default function AdminDashboard() {
     }
   };
 
-  const getTaskTitle = (taskId: string) => {
-    return tasks.find((task) => task.$id === taskId)?.taskTitle ?? taskId;
+  const getTaskTitle = (taskRef: Submission["task"]) => {
+    if (typeof taskRef === "object" && taskRef !== null) {
+      return taskRef.taskTitle;
+    }
+
+    return tasks.find((task) => task.$id === taskRef)?.taskTitle ?? taskRef;
   };
 
-  const getUserName = (userId: string) => {
-    return users.find((user) => user.$id === userId)?.name ?? userId;
+  const getUserName = (userRef: string | null | undefined) => {
+    if (!userRef) {
+      return "—";
+    }
+
+    return users.find((user) => user.$id === userRef)?.name ?? userRef;
   };
 
   const adminId = appUser?.$id ?? user?.$id ?? null;
-  const adminName = appUser?.name || user?.name || "Admin";
+
+  const openTaskForm = () => {
+    setForm({
+      title: "",
+      description: "",
+      dueDate: "",
+      estimatedEffort: "",
+      status: "open",
+    });
+    setFormError(null);
+    setFormSuccess(false);
+    setShowTaskForm(true);
+  };
+
+  const parseEvaluationDetails = (submission: Submission) => {
+    let issues: string[] = [];
+    let strengths: string[] = [];
+
+    if (submission.aiEvaluation) {
+      try {
+        const parsed = JSON.parse(submission.aiEvaluation);
+        issues = Array.isArray(parsed.issues) ? parsed.issues : [];
+        strengths = Array.isArray(parsed.strengths) ? parsed.strengths : [];
+      } catch {
+        issues = [];
+        strengths = [];
+      }
+    }
+
+    return { issues, strengths };
+  };
 
   const handleTaskStatusChange = async (
     taskId: string,
@@ -145,7 +240,9 @@ export default function AdminDashboard() {
 
     setStatusError(null);
     setSavingTaskStatusId(taskId);
-    const reviewedBy = status === "reviewed" ? adminId : null;
+    const currentTask = tasks.find((task) => task.$id === taskId);
+    const reviewedBy =
+      status === "open" ? null : (currentTask?.reviewedBy ?? null);
     try {
       await databases.updateDocument(DB_ID, TASKS_COLLECTION_ID, taskId, {
         status,
@@ -153,7 +250,9 @@ export default function AdminDashboard() {
       });
       setTasks((currentTasks) =>
         currentTasks.map((task) =>
-          task.$id === taskId ? { ...task, status, reviewedBy } : task,
+          task.$id === taskId
+            ? normalizeTask({ ...task, status, reviewedBy })
+            : task,
         ),
       );
     } catch (e) {
@@ -166,104 +265,152 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleSubmissionStatusChange = async (
-    submissionId: string,
-    reviewStatus: Submission["reviewStatus"],
+  const openEvaluationModal = (
+    submission: Submission,
+    startInEditMode = false,
   ) => {
-    if (!adminId) {
-      setStatusError("You must be logged in to update submission status.");
-      return;
-    }
+    const { issues, strengths } = parseEvaluationDetails(submission);
+    setEvaluationError(null);
+    setEvaluationModalSubmissionId(submission.$id);
+    setIsEditingEvaluation(startInEditMode);
+    setEvaluationDraft({
+      score:
+        typeof submission.aiScore === "number"
+          ? String(submission.aiScore)
+          : "",
+      feedback: submission.aiFeedback ?? "",
+      issuesText: issues.join("\n"),
+      strengthsText: strengths.join("\n"),
+    });
+  };
 
-    setStatusError(null);
-    setSavingSubmissionStatusId(submissionId);
-    const reviewedBy = reviewStatus === "reviewed" ? adminId : null;
+  const closeEvaluationModal = () => {
+    setEvaluationModalSubmissionId(null);
+    setIsEditingEvaluation(false);
+    setEvaluationDraft({
+      score: "",
+      feedback: "",
+      issuesText: "",
+      strengthsText: "",
+    });
+    setEvaluationError(null);
+  };
+
+  const replaceSubmission = (nextSubmission: Submission) => {
+    setSubmissions((currentSubmissions) =>
+      currentSubmissions.map((currentSubmission) =>
+        currentSubmission.$id === nextSubmission.$id
+          ? normalizeSubmission(nextSubmission)
+          : currentSubmission,
+      ),
+    );
+  };
+
+  const handleRunEvaluation = async (submission: Submission) => {
+    setEvaluationError(null);
+    setEvaluatingSubmissionId(submission.$id);
     try {
-      await databases.updateDocument(
-        DB_ID,
-        SUBMISSIONS_COLLECTION_ID,
-        submissionId,
-        {
-          reviewStatus,
-          reviewedBy,
-        },
+      const updatedSubmission = await evaluateSubmissionForAdmin(
+        submission.$id,
       );
-      setSubmissions((currentSubmissions) =>
-        currentSubmissions.map((submission) =>
-          submission.$id === submissionId
-            ? { ...submission, reviewStatus, reviewedBy }
-            : submission,
-        ),
-      );
+      replaceSubmission(updatedSubmission);
     } catch (e) {
-      console.error("Failed to update submission status", e);
-      setStatusError(
-        e instanceof Error
-          ? e.message
-          : "Failed to update submission review status.",
+      console.error("Failed to evaluate submission", e);
+      setEvaluationError(
+        e instanceof Error ? e.message : "Failed to evaluate submission.",
       );
     } finally {
-      setSavingSubmissionStatusId(null);
+      setEvaluatingSubmissionId(null);
     }
   };
 
-  const openFeedbackEditor = (submission: Submission) => {
-    setFeedbackError(null);
-    setFeedbackEditorId(submission.$id);
-    setFeedbackDraft("");
-  };
-
-  const closeFeedbackEditor = () => {
-    setFeedbackEditorId(null);
-    setFeedbackDraft("");
-    setFeedbackError(null);
-  };
-
-  const handleSaveFeedback = async (submission: Submission) => {
+  const handleSaveEvaluation = async (submission: Submission) => {
     if (!adminId) {
-      setFeedbackError("You must be logged in to save feedback.");
+      setEvaluationError("You must be logged in to save evaluation changes.");
       return;
     }
 
-    const trimmedFeedback = feedbackDraft.trim();
-    if (!trimmedFeedback) {
-      setFeedbackError("Feedback cannot be empty.");
+    const trimmedFeedback = evaluationDraft.feedback.trim();
+    const parsedScore = Number(evaluationDraft.score);
+    if (evaluationDraft.score && Number.isNaN(parsedScore)) {
+      setEvaluationError("Score must be a valid number.");
       return;
     }
 
-    const feedbackEntry = `${adminName}: ${trimmedFeedback}`;
-    const nextFeedback = submission.feedback
-      ? `${submission.feedback}\n${feedbackEntry}`
-      : feedbackEntry;
+    if (trimmedFeedback.length === 0) {
+      setEvaluationError("Feedback cannot be empty.");
+      return;
+    }
 
-    setFeedbackError(null);
-    setSavingFeedbackId(submission.$id);
+    setEvaluationError(null);
+    setSavingEvaluationId(submission.$id);
     try {
-      await databases.updateDocument(
-        DB_ID,
-        SUBMISSIONS_COLLECTION_ID,
+      const updatedSubmission = await saveAdminEvaluation(
         submission.$id,
         {
-          feedback: nextFeedback,
+          score: evaluationDraft.score ? parsedScore : null,
+          feedback: trimmedFeedback,
+          issues: normalizeUrls(
+            evaluationDraft.issuesText.split("\n").map((item) => item.trim()),
+          ),
+          strengths: normalizeUrls(
+            evaluationDraft.strengthsText
+              .split("\n")
+              .map((item) => item.trim()),
+          ),
         },
+        adminId,
       );
-      setSubmissions((currentSubmissions) =>
-        currentSubmissions.map((currentSubmission) =>
-          currentSubmission.$id === submission.$id
-            ? { ...currentSubmission, feedback: nextFeedback }
-            : currentSubmission,
-        ),
-      );
-      closeFeedbackEditor();
+      replaceSubmission(updatedSubmission);
+      openEvaluationModal(updatedSubmission, false);
     } catch (e) {
-      console.error("Failed to save feedback", e);
-      setFeedbackError(
-        e instanceof Error ? e.message : "Failed to save feedback.",
+      console.error("Failed to save evaluation", e);
+      setEvaluationError(
+        e instanceof Error ? e.message : "Failed to save evaluation.",
       );
     } finally {
-      setSavingFeedbackId(null);
+      setSavingEvaluationId(null);
     }
   };
+
+  const handleApproveSubmission = async (submission: Submission) => {
+    if (!adminId) {
+      setEvaluationError("You must be logged in to approve a submission.");
+      return;
+    }
+
+    if (!submission.aiEvaluation && !submission.aiFeedback) {
+      setEvaluationError(
+        "Run the AI evaluation before approving this submission.",
+      );
+      return;
+    }
+
+    setEvaluationError(null);
+    setApprovingSubmissionId(submission.$id);
+    try {
+      const updatedSubmission = await approveSubmission(
+        submission.$id,
+        adminId,
+      );
+      replaceSubmission(updatedSubmission);
+    } catch (e) {
+      console.error("Failed to approve submission", e);
+      setEvaluationError(
+        e instanceof Error ? e.message : "Failed to approve submission.",
+      );
+    } finally {
+      setApprovingSubmissionId(null);
+    }
+  };
+
+  const activeEvaluationSubmission =
+    submissions.find(
+      (submission) => submission.$id === evaluationModalSubmissionId,
+    ) ?? null;
+  const activeEvaluationDetails = activeEvaluationSubmission
+    ? parseEvaluationDetails(activeEvaluationSubmission)
+    : { issues: [], strengths: [] };
 
   return (
     <div className="dashboard">
@@ -284,71 +431,93 @@ export default function AdminDashboard() {
 
       {activeTab === "tasks" && (
         <div className="section">
-          <h2>Create Task</h2>
-          <form className="task-form" onSubmit={handleCreateTask}>
-            {formError && <p className="error">{formError}</p>}
-            {formSuccess && (
-              <p className="success">Task created successfully.</p>
-            )}
-
-            <div className="field">
-              <label>Title</label>
-              <input
-                type="text"
-                required
-                value={form.title}
-                onChange={(e) => setForm({ ...form, title: e.target.value })}
-              />
-            </div>
-            <div className="field">
-              <label>Description</label>
-              <textarea
-                required
-                value={form.description}
-                onChange={(e) =>
-                  setForm({ ...form, description: e.target.value })
-                }
-              />
-            </div>
-            <div className="field">
-              <label>Due Date</label>
-              <input
-                type="date"
-                required
-                value={form.dueDate}
-                onChange={(e) => setForm({ ...form, dueDate: e.target.value })}
-              />
-            </div>
-            <div className="field">
-              <label>Estimated Effort</label>
-              <input
-                type="text"
-                placeholder="e.g. 3 days"
-                value={form.estimatedEffort}
-                onChange={(e) =>
-                  setForm({ ...form, estimatedEffort: e.target.value })
-                }
-              />
-            </div>
-            <div className="field">
-              <label>Status</label>
-              <select
-                value={form.status}
-                onChange={(e) =>
-                  setForm({ ...form, status: e.target.value as Task["status"] })
-                }
-              >
-                <option value="open">Open</option>
-                <option value="completed">Completed</option>
-                <option value="reviewed">Reviewed</option>
-              </select>
-            </div>
-            <button type="submit" disabled={submitting}>
-              {submitting ? "Creating…" : "Create Task"}
+          <div className="section-header">
+            <h2>All Tasks</h2>
+            <button className="btn-primary" onClick={openTaskForm}>
+              + New Task
             </button>
-          </form>
+          </div>
 
-          <h2 style={{ marginTop: "2rem" }}>All Tasks</h2>
+          {formSuccess && !showTaskForm && (
+            <p className="success">Task created successfully.</p>
+          )}
+
+          {showTaskForm && (
+            <form className="task-form" onSubmit={handleCreateTask}>
+              {formError && <p className="error">{formError}</p>}
+
+              <div className="field">
+                <label>Title</label>
+                <input
+                  type="text"
+                  required
+                  value={form.title}
+                  onChange={(e) => setForm({ ...form, title: e.target.value })}
+                />
+              </div>
+              <div className="field">
+                <label>Description</label>
+                <textarea
+                  required
+                  value={form.description}
+                  onChange={(e) =>
+                    setForm({ ...form, description: e.target.value })
+                  }
+                />
+              </div>
+              <div className="field">
+                <label>Due Date</label>
+                <input
+                  type="date"
+                  required
+                  value={form.dueDate}
+                  onChange={(e) =>
+                    setForm({ ...form, dueDate: e.target.value })
+                  }
+                />
+              </div>
+              <div className="field">
+                <label>Estimated Effort</label>
+                <input
+                  type="text"
+                  placeholder="e.g. 3 days"
+                  value={form.estimatedEffort}
+                  onChange={(e) =>
+                    setForm({ ...form, estimatedEffort: e.target.value })
+                  }
+                />
+              </div>
+              <div className="field">
+                <label>Status</label>
+                <select
+                  value={form.status}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      status: e.target.value as Task["status"],
+                    })
+                  }
+                >
+                  <option value="open">Open</option>
+                  <option value="completed">Completed</option>
+                </select>
+              </div>
+              <div className="form-actions">
+                <button type="submit" disabled={submitting}>
+                  {submitting ? "Creating…" : "Create Task"}
+                </button>
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  onClick={() => setShowTaskForm(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* <h2 style={{ marginTop: "2rem" }}>All Tasks</h2> */}
           {statusError && <p className="error">{statusError}</p>}
           {loadingTasks ? (
             <p>Loading tasks…</p>
@@ -386,7 +555,6 @@ export default function AdminDashboard() {
                       >
                         <option value="open">Open</option>
                         <option value="completed">Completed</option>
-                        <option value="reviewed">Reviewed</option>
                       </select>
                     </td>
                     <td>
@@ -404,7 +572,7 @@ export default function AdminDashboard() {
         <div className="section">
           <h2>Intern Submissions</h2>
           {statusError && <p className="error">{statusError}</p>}
-          {feedbackError && <p className="error">{feedbackError}</p>}
+          {evaluationError && <p className="error">{evaluationError}</p>}
           {loadingSubmissions || loadingUsers || loadingTasks ? (
             <p>Loading submissions…</p>
           ) : submissions.length === 0 ? (
@@ -421,7 +589,9 @@ export default function AdminDashboard() {
                   <th>URLs</th>
                   <th>Status</th>
                   <th>Reviewed By</th>
+                  <th>Score</th>
                   <th>Feedback</th>
+                  <th>Approval</th>
                   <th>Action</th>
                 </tr>
               </thead>
@@ -452,70 +622,265 @@ export default function AdminDashboard() {
                       )}
                     </td>
                     <td>
-                      <select
-                        value={sub.reviewStatus}
-                        onChange={(e) =>
-                          handleSubmissionStatusChange(
-                            sub.$id,
-                            e.target.value as Submission["reviewStatus"],
-                          )
-                        }
-                        disabled={savingSubmissionStatusId === sub.$id}
-                      >
-                        <option value="pendingReview">Pending</option>
-                        <option value="reviewed">Reviewed</option>
-                      </select>
+                      <span className={`badge badge-${sub.reviewStatus}`}>
+                        {sub.reviewStatus === "pendingReview"
+                          ? "Pending"
+                          : "Reviewed"}
+                      </span>
                     </td>
                     <td>
                       {sub.reviewedBy ? getUserName(sub.reviewedBy) : "—"}
                     </td>
-                    <td style={{ whiteSpace: "pre-line" }}>
-                      {sub.feedback || "—"}
+                    <td>
+                      {typeof sub.aiScore === "number" ? sub.aiScore : "—"}/10
                     </td>
                     <td>
-                      {feedbackEditorId === sub.$id ? (
-                        <div className="field" style={{ marginBottom: 0 }}>
-                          <textarea
-                            value={feedbackDraft}
-                            onChange={(e) => setFeedbackDraft(e.target.value)}
-                            placeholder="Add feedback for this submission"
-                            rows={3}
-                          />
-                          <div className="form-actions">
-                            <button
-                              type="button"
-                              onClick={() => handleSaveFeedback(sub)}
-                              disabled={savingFeedbackId === sub.$id}
-                            >
-                              {savingFeedbackId === sub.$id
-                                ? "Saving…"
-                                : "Save"}
-                            </button>
-                            <button
-                              type="button"
-                              className="btn-ghost"
-                              onClick={closeFeedbackEditor}
-                              disabled={savingFeedbackId === sub.$id}
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
+                      {sub.aiEvaluatedAt ? (
                         <button
                           type="button"
                           className="btn-ghost"
-                          onClick={() => openFeedbackEditor(sub)}
+                          onClick={() => openEvaluationModal(sub)}
                         >
-                          Feedback
+                          View Feedback
                         </button>
+                      ) : (
+                        "—"
                       )}
+                    </td>
+                    <td>
+                      {sub.isApprovedByAdmin ? "Approved" : "Pending approval"}
+                    </td>
+                    <td>
+                      <div className="form-actions">
+                        <button
+                          type="button"
+                          className="btn-ghost"
+                          onClick={() => handleRunEvaluation(sub)}
+                          disabled={evaluatingSubmissionId === sub.$id}
+                        >
+                          {evaluatingSubmissionId === sub.$id
+                            ? "Evaluating…"
+                            : sub.aiEvaluatedAt
+                              ? "Re-evaluate"
+                              : "Evaluate"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleApproveSubmission(sub)}
+                          disabled={
+                            approvingSubmissionId === sub.$id ||
+                            !sub.aiEvaluatedAt ||
+                            sub.isApprovedByAdmin
+                          }
+                        >
+                          {approvingSubmissionId === sub.$id
+                            ? "Approving…"
+                            : sub.isApprovedByAdmin
+                              ? "Approved"
+                              : "Approve"}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           )}
+        </div>
+      )}
+      {activeEvaluationSubmission && (
+        <div
+          className="modal-overlay"
+          role="presentation"
+          onClick={closeEvaluationModal}
+        >
+          <div
+            className="modal-card"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="evaluation-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div>
+                <h3 id="evaluation-modal-title">Evaluation Feedback</h3>
+                <p className="modal-subtitle">
+                  {activeEvaluationSubmission.submissionTitle}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={closeEvaluationModal}
+              >
+                Close
+              </button>
+            </div>
+
+            {evaluationError && <p className="error">{evaluationError}</p>}
+
+            {isEditingEvaluation ? (
+              <div className="modal-body">
+                <div className="field">
+                  <label>Score</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="10"
+                    step="0.1"
+                    value={evaluationDraft.score}
+                    onChange={(e) =>
+                      setEvaluationDraft((current) => ({
+                        ...current,
+                        score: e.target.value,
+                      }))
+                    }
+                    placeholder="Score"
+                  />
+                </div>
+                <div className="field">
+                  <label>Feedback</label>
+                  <textarea
+                    value={evaluationDraft.feedback}
+                    onChange={(e) =>
+                      setEvaluationDraft((current) => ({
+                        ...current,
+                        feedback: e.target.value,
+                      }))
+                    }
+                    placeholder="Edit evaluation feedback"
+                    rows={6}
+                  />
+                </div>
+                <div className="field">
+                  <label>Issues</label>
+                  <textarea
+                    value={evaluationDraft.issuesText}
+                    onChange={(e) =>
+                      setEvaluationDraft((current) => ({
+                        ...current,
+                        issuesText: e.target.value,
+                      }))
+                    }
+                    placeholder="Issues, one per line"
+                    rows={4}
+                  />
+                </div>
+                <div className="field">
+                  <label>Strengths</label>
+                  <textarea
+                    value={evaluationDraft.strengthsText}
+                    onChange={(e) =>
+                      setEvaluationDraft((current) => ({
+                        ...current,
+                        strengthsText: e.target.value,
+                      }))
+                    }
+                    placeholder="Strengths, one per line"
+                    rows={4}
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="modal-body">
+                <div className="evaluation-grid">
+                  <div className="evaluation-panel">
+                    <span className="evaluation-label">Score</span>
+                    <strong className="evaluation-score">
+                      {typeof activeEvaluationSubmission.aiScore === "number"
+                        ? `${activeEvaluationSubmission.aiScore}/10`
+                        : "—"}
+                    </strong>
+                  </div>
+                  <div className="evaluation-panel">
+                    <span className="evaluation-label">Status</span>
+                    <strong>
+                      {activeEvaluationSubmission.isApprovedByAdmin
+                        ? "Approved"
+                        : "Pending approval"}
+                    </strong>
+                  </div>
+                </div>
+
+                <div className="evaluation-panel">
+                  <span className="evaluation-label">Feedback</span>
+                  <p className="evaluation-copy">
+                    {activeEvaluationSubmission.aiFeedback ||
+                      "No feedback yet."}
+                  </p>
+                </div>
+
+                <div className="evaluation-grid">
+                  <div className="evaluation-panel">
+                    <span className="evaluation-label">Issues</span>
+                    {activeEvaluationDetails.issues.length > 0 ? (
+                      <ul className="evaluation-list">
+                        {activeEvaluationDetails.issues.map((issue, index) => (
+                          <li key={`issue-${index}`}>{issue}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="evaluation-copy">No issues listed.</p>
+                    )}
+                  </div>
+                  <div className="evaluation-panel">
+                    <span className="evaluation-label">Strengths</span>
+                    {activeEvaluationDetails.strengths.length > 0 ? (
+                      <ul className="evaluation-list">
+                        {activeEvaluationDetails.strengths.map(
+                          (strength, index) => (
+                            <li key={`strength-${index}`}>{strength}</li>
+                          ),
+                        )}
+                      </ul>
+                    ) : (
+                      <p className="evaluation-copy">No strengths listed.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="modal-actions">
+              {isEditingEvaluation ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleSaveEvaluation(activeEvaluationSubmission)
+                    }
+                    disabled={
+                      savingEvaluationId === activeEvaluationSubmission.$id
+                    }
+                  >
+                    {savingEvaluationId === activeEvaluationSubmission.$id
+                      ? "Saving…"
+                      : "Save"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    onClick={() => setIsEditingEvaluation(false)}
+                    disabled={
+                      savingEvaluationId === activeEvaluationSubmission.$id
+                    }
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  onClick={() =>
+                    openEvaluationModal(activeEvaluationSubmission, true)
+                  }
+                >
+                  Edit Result
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
